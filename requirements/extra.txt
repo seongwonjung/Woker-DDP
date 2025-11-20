@@ -1,0 +1,7 @@
+# Vertex AI Gemini 클라이언트(생성형 AI)
+google-cloud-aiplatform>=1.126.0
+pydub==0.25.1
+gTTS==2.5.1
+boto3>=1.34
+requests>=2.31
+nest-asyncio>=1.6.0

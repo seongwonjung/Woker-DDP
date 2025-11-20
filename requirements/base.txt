@@ -1,0 +1,9 @@
+numpy>=2.0.2,<2.1
+ffmpeg-python==0.2.0
+
+# (옵션) 오디오 I/O 안정성 위해 권장
+soundfile>=0.12
+librosa>=0.10,<0.11
+pyrubberband
+soundfile
+resemblyzer>=0.1.2

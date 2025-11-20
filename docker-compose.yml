@@ -1,0 +1,64 @@
+services:
+  api:
+    container_name: dubbing-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: dubbing-worker:latest
+    command: sh -c "uvicorn main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "18000:8000"
+    volumes:
+      - ./app:/app
+      - ./data:/data
+      - ./models:/models
+      - ~/.aws:/root/.aws:ro
+      - ./key/gcp-sa.json:/app/key/gcp-sa.json:ro
+    env_file:
+      - .env
+    environment:
+      - AWS_PROFILE=dev
+      - AWS_REGION=ap-northeast-2
+      - AWS_S3_BUCKET=dupilot-dev-media
+      - JOB_QUEUE_URL=https://sqs.ap-northeast-2.amazonaws.com/148761638563/test2-dupilot-queue.fifo
+      - JOB_CALLBACK_BASE_URL=http://host.docker.internal:8000
+      - DATA_DIR=/data
+      - MODELS_DIR=/models
+      - WHISPERX_CACHE_DIR=/models/.cache/whisperx
+      - XDG_CACHE_HOME=/models/.cache
+      - MODELSCOPE_CACHE=/models/.cache/modelscope
+      - PYTHONPATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS
+    gpus: all
+    restart: unless-stopped
+
+  worker:
+    container_name: dubbing-worker
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: dubbing-worker:latest
+    command: python worker.py
+    volumes:
+      - ./app:/app
+      - ./data:/data
+      - ./models:/models
+      - ~/.aws:/root/.aws:ro
+      - ./key/gcp-sa.json:/app/key/gcp-sa.json:ro
+    env_file:
+      - .env
+    environment:
+      - AWS_PROFILE=dev
+      - AWS_REGION=ap-northeast-2
+      - AWS_S3_BUCKET=dupilot-dev-media
+      - JOB_QUEUE_URL=https://sqs.ap-northeast-2.amazonaws.com/148761638563/test2-dupilot-queue.fifo
+      - JOB_CALLBACK_BASE_URL=http://host.docker.internal:8000
+      - DATA_DIR=/data
+      - MODELS_DIR=/models
+      - WHISPERX_CACHE_DIR=/models/.cache/whisperx
+      - XDG_CACHE_HOME=/models/.cache
+      - MODELSCOPE_CACHE=/models/.cache/modelscope
+      - PYTHONPATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS
+    gpus: all
+    restart: unless-stopped

@@ -1,0 +1,40 @@
+version: 0.0
+os: linux
+files:
+  - source: / # zip 파일의 모든 것 (/)
+    destination: /home/ubuntu/app # EC2의 이 폴더로 복사
+    overwrite: true # 덮어쓰기 허용
+
+permissions: # 복사된 파일에 권한 부여
+  - object: /home/ubuntu/app
+    owner: ubuntu
+    group: ubuntu
+    mode: 755
+    type:
+      - directory
+  - object: /home/ubuntu/app
+    owner: ubuntu
+    group: ubuntu
+    mode: 644
+    type:
+      - file
+
+hooks:
+  # 배포 단계별로 실행할 스크립트
+  ApplicationStop:
+    - location: deploy/stop_server.sh # 기존 서버 중지
+      timeout: 300
+      runas: ubuntu
+  AfterInstall:
+    - location: deploy/create_env.sh
+      timeout: 300
+      runas: root
+
+    - location: deploy/install_dependencies.sh
+      timeout: 1000
+      runas: root
+
+  ApplicationStart:
+    - location: deploy/start_server.sh # 새 서버 시작
+      timeout: 1500
+      runas: ubuntu

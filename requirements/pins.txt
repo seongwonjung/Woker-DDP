@@ -1,0 +1,9 @@
+# PyTorch 도메인 API 매트릭스(2.8.0 ↔ vision 0.23.0 / audio 2.8.0)에 맞춤
+# (CUDA 변형은 pip 인덱스에서 결정, 아래 Dockerfile에 설정)
+torch==2.8.0
+torchaudio==2.8.0
+torchvision==0.23.0
+
+# 네가 원하는 범위 유지
+faster-whisper>=1.1,<2
+huggingface_hub>=0.24

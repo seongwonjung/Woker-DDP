@@ -1,0 +1,6 @@
+-r requirements/base.txt
+-r requirements/python.txt
+-r requirements/whisperx.txt
+-r requirements/cosyvoice.txt
+-r requirements/extra.txt
+-r requirements/common.txt

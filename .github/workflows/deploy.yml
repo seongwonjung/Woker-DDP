@@ -1,0 +1,55 @@
+name: Deploy Worker
+
+on:
+  workflow_run:
+    workflows: ["CI"] # 이전 워크플로 이름
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  deploy-via-codedeploy:
+    name: Deploy to EC2 via CodeDeploy
+    runs-on: ubuntu-latest
+
+    # 'Python application' 워크플로가 '성공'했을 때만 배포 실행
+    if: github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      # 1. 레포지토리 코드 체크아웃
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Python 환경 설정 (zip 도구 사용)
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      # 3. 소스 코드를 zip 파일로 압축 (appspec.yml 포함)
+      - name: Create deployment package
+        run: zip -r app.zip . -x ".git*" ".github/*"
+
+      # 4. AWS 자격 증명 설정
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # 5. zip 파일을 S3 버킷에 업로드
+      - name: Upload package to S3
+        run: |
+          aws s3 cp app.zip s3://${{ secrets.S3_BUCKET }}/worker-app/app.zip
+
+      # 6. AWS CodeDeploy 배포 생성 (핵심)
+      - name: Create CodeDeploy Deployment
+        run: |
+          aws deploy create-deployment \
+            --application-name ${{ secrets.CODEDEPLOY_APP_NAME }} \
+            --deployment-group-name ${{ secrets.CODEDEPLOY_DEPLOYMENT_GROUP_NAME }} \
+            --s3-location bucket=${{ secrets.S3_BUCKET }},key=worker-app/app.zip,bundleType=zip \
+            --description "Deployment from GitHub Actions" \
+            --ignore-application-stop-failures # (선택) 첫 배포 시 중지할 서버가 없어도 무시

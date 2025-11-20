@@ -1,0 +1,7 @@
+whisperx==3.7.4
+faster-whisper>=1.1,<2
+huggingface_hub>=0.24
+demucs==4.0.1
+# diarization/VAD 쓰면 pyannote 계열 추가 가능 (옵션)
+pyannote.audio>=3.3.2,<4
+pyannote.pipeline>=3.0.1,<4

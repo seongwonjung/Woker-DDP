@@ -1,0 +1,12 @@
+.git
+**/__pycache__/
+**/.pytest_cache/
+node_modules
+data/
+models/
+inputs/
+interim/
+outputs/
+*.log
+*.tmp
+.env
