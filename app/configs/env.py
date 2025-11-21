@@ -18,3 +18,4 @@ PROFILE = os.getenv("AWS_PROFILE", "dev")
 LOG_LEVEL = os.getenv("WORKER_LOG_LEVEL", "INFO")
 DEFAULT_TARGET_LANG = os.getenv("DEFAULT_TARGET_LANG", "en")
 DEFAULT_SOURCE_LANG = os.getenv("DEFAULT_SOURCE_LANG", "auto")
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "15"))  # 기본값

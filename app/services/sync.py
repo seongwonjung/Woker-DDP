@@ -91,6 +91,29 @@ def _sync_single_segment(
     return stretched, ratio_to_apply, padding_ms, current_ms
 
 
+def sync_segment_to_range(
+    input_path: Path, target_duration_ms: int, output_path: Path
+) -> Path:
+    """
+    segment_tts의 fixed 모드에서 사용할 길이 보정:
+    - sync.py와 동일하게 pyrubberband로 tempo 조절
+    - 너무 많이 느려지는 건 MAX_SLOW_RATIO까지만 허용
+    """
+    if target_duration_ms <= 0:
+        raise ValueError("target_duration_ms must be positive")
+
+    # sync.py의 시간 보정 로직 재사용
+    synced_audio, ratio_applied, padding_ms, original_ms = _sync_single_segment(
+        input_path,
+        target_ms=target_duration_ms,
+        allow_ratio=MAX_SLOW_RATIO,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    synced_audio.export(str(output_path), format="wav")
+    return output_path
+
+
 def sync_segments(job_id: str) -> List[Dict]:
     """
     번역/TTS 후 구간별 오디오를 원본 화자 길이에 맞게 보정합니다.

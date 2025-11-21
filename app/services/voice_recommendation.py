@@ -12,6 +12,8 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 import numpy as np
 
+from services.speaker_embeddings import load_embedding_index
+
 logger = logging.getLogger(__name__)
 
 _S3_CLIENT: Any | None = None
@@ -35,9 +37,7 @@ def _normalize_lang(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
-def _resolve_local_library_path(
-    language: str | None, index_path: Path | None
-) -> Path:
+def _resolve_local_library_path(language: str | None, index_path: Path | None) -> Path:
     root = index_path or _default_library_root()
     if root.is_dir():
         lang_slug = _normalize_lang(language) or "default"
@@ -317,7 +317,9 @@ def recommend_voice_replacements(
         return {}
 
     target_norm = _normalize_lang(target_lang)
-    candidates = [entry for entry in library if not target_norm or entry.language == target_norm]
+    candidates = [
+        entry for entry in library if not target_norm or entry.language == target_norm
+    ]
     if not candidates:
         candidates = list(library)
 
@@ -344,3 +346,175 @@ def recommend_voice_replacements(
                 entry=best_entry,
             )
     return matches
+
+
+def strip_voice_samples_prefix(value: str) -> str:
+    """voice-samples/ prefix를 제거합니다."""
+    marker = "voice-samples/"
+    key = value
+    if key.startswith("s3://"):
+        remainder = key.split("://", 1)[1]
+        if "/" in remainder:
+            key = remainder.split("/", 1)[1]
+        else:
+            key = ""
+    if marker in key:
+        key = key.split(marker, 1)[1]
+    return key.lstrip("/")
+
+
+def ensure_voice_library_index(
+    language: str,
+    force_refresh: bool = False,
+    voice_samples_embed_dir: Path | None = None,
+    voice_library_bucket: str | None = None,
+) -> Path | None:
+    """Voice sample metadata is mirrored from S3; refresh before touching the local cache."""
+    from services.lang import normalize_lang_code
+    from utils.s3 import download_from_s3
+
+    lang_slug = normalize_lang_code(language) or "misc"
+    if voice_samples_embed_dir is None:
+        voice_samples_embed_dir = _default_library_root()
+    lang_dir = voice_samples_embed_dir / lang_slug
+    lang_dir.mkdir(parents=True, exist_ok=True)
+    local_path = lang_dir / f"{lang_slug}.json"
+    remote_key = f"voice-samples/embedding/{lang_slug}/{lang_slug}.json"
+    if voice_library_bucket is None:
+        voice_library_bucket = os.getenv("VOICE_LIBRARY_BUCKET") or os.getenv(
+            "AWS_S3_BUCKET"
+        )
+    if force_refresh or not local_path.is_file():
+        if voice_library_bucket:
+            download_from_s3(voice_library_bucket, remote_key, local_path)
+    return local_path if local_path.is_file() else None
+
+
+def resolve_s3_location(raw: str, default_bucket: str) -> tuple[str, str]:
+    """
+    Parse strings like 's3://bucket/key' or bare keys into (bucket, key).
+    Falls back to default_bucket when explicit bucket is missing.
+    """
+    value = (raw or "").strip()
+    if not value:
+        raise ValueError("빈 S3 위치 문자열입니다.")
+    if value.startswith("s3://"):
+        remainder = value[5:]
+        if "/" not in remainder:
+            raise ValueError(f"Invalid S3 URI: {raw}")
+        bucket, key = remainder.split("/", 1)
+        return bucket, key
+    key = value.lstrip("/")
+    return default_bucket, key
+
+
+def materialize_voice_replacements(
+    paths,
+    replacements: dict[str, VoiceReplacement],
+    default_bucket: str,
+) -> dict[str, dict]:
+    """Voice replacement 샘플을 로컬에 다운로드하고 준비합니다."""
+    from utils.s3 import download_from_s3
+
+    asset_dir = paths.interim_dir / "voice_replacements"
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    prepared: dict[str, dict] = {}
+    for speaker, plan in replacements.items():
+        entry = plan.entry
+        local_path: Path | None = None
+        if entry.sample_path:
+            candidate = Path(entry.sample_path)
+            if not candidate.is_absolute():
+                candidate = (paths.interim_dir / candidate).resolve()
+            if candidate.is_file():
+                local_path = candidate
+            else:
+                logger.warning(
+                    "Voice replacement sample for %s not found at %s",
+                    entry.voice_id,
+                    candidate,
+                )
+                continue
+        elif entry.sample_key:
+            bucket = entry.sample_bucket or default_bucket
+            local_path = asset_dir / f"{speaker}_{entry.voice_id}.wav"
+            # Voice replacement clips live in S3; download locally when preparing overrides.
+            if not download_from_s3(bucket, entry.sample_key, local_path):
+                logger.warning(
+                    "Failed to download voice replacement sample %s from s3://%s/%s",
+                    entry.voice_id,
+                    bucket,
+                    entry.sample_key,
+                )
+                continue
+        else:
+            logger.warning(
+                "Voice library entry %s lacks sample reference.", entry.voice_id
+            )
+            continue
+
+        prepared[speaker] = {
+            "audio_path": str(local_path),
+            "prompt_text": entry.prompt_text,
+            "voice_id": entry.voice_id,
+            "similarity": plan.similarity,
+            "sample_key": entry.sample_key,
+            "sample_bucket": entry.sample_bucket or default_bucket,
+            "metadata": entry.metadata or {},
+            "language": entry.language,
+        }
+    return prepared
+
+
+def maybe_prepare_voice_replacements(
+    paths,
+    target_lang: str,
+    default_bucket: str,
+    voice_samples_embed_dir: Path | None = None,
+    voice_library_bucket: str | None = None,
+) -> tuple[dict[str, dict], dict[str, Any]]:
+    """Voice replacement를 준비합니다."""
+    diagnostics: dict[str, Any] = {
+        "enabled": False,
+        "target_lang": target_lang,
+    }
+    index_path = paths.vid_tts_dir / "speaker_embeddings" / "speaker_embeddings.json"
+    embeddings = load_embedding_index(index_path)
+    if not embeddings:
+        diagnostics["reason"] = "missing_embeddings"
+        return {}, diagnostics
+
+    ensure_voice_library_index(
+        target_lang,
+        force_refresh=True,
+        voice_samples_embed_dir=voice_samples_embed_dir,
+        voice_library_bucket=voice_library_bucket,
+    )
+    library = load_voice_library(
+        target_lang, voice_samples_embed_dir or _default_library_root()
+    )
+    if not library:
+        diagnostics["reason"] = "library_unavailable"
+        return {}, diagnostics
+
+    replacements = recommend_voice_replacements(
+        embeddings,
+        library,
+        target_lang=target_lang,
+    )
+    if not replacements:
+        diagnostics["reason"] = "no_matches"
+        return {}, diagnostics
+
+    prepared = materialize_voice_replacements(paths, replacements, default_bucket)
+    if not prepared:
+        diagnostics["reason"] = "materialization_failed"
+        return {}, diagnostics
+
+    diagnostics["enabled"] = True
+    diagnostics["reason"] = "ok"
+    diagnostics["matches"] = {
+        speaker: repl.summary() for speaker, repl in replacements.items()
+    }
+    diagnostics["prepared_speakers"] = sorted(prepared.keys())
+    return prepared, diagnostics

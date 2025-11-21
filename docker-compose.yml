@@ -13,6 +13,7 @@ services:
       - ./app:/app
       - ./data:/data
       - ./models:/models
+      - ./models/.cache:/models/.cache
       - ~/.aws:/root/.aws:ro
       - ./key/gcp-sa.json:/app/key/gcp-sa.json:ro
     env_file:
@@ -21,7 +22,8 @@ services:
       - AWS_PROFILE=dev
       - AWS_REGION=ap-northeast-2
       - AWS_S3_BUCKET=dupilot-dev-media
-      - JOB_QUEUE_URL=https://sqs.ap-northeast-2.amazonaws.com/148761638563/test2-dupilot-queue.fifo
+      - JOB_QUEUE_URL=https://sqs.ap-northeast-2.amazonaws.com/148761638563/test3-dupilot-queue.fifo
+      - JOB_QUEUE_FIFO=true
       - JOB_CALLBACK_BASE_URL=http://host.docker.internal:8000
       - DATA_DIR=/data
       - MODELS_DIR=/models
@@ -44,6 +46,7 @@ services:
       - ./app:/app
       - ./data:/data
       - ./models:/models
+      - ./models/.cache:/models/.cache
       - ~/.aws:/root/.aws:ro
       - ./key/gcp-sa.json:/app/key/gcp-sa.json:ro
     env_file:
@@ -52,7 +55,8 @@ services:
       - AWS_PROFILE=dev
       - AWS_REGION=ap-northeast-2
       - AWS_S3_BUCKET=dupilot-dev-media
-      - JOB_QUEUE_URL=https://sqs.ap-northeast-2.amazonaws.com/148761638563/test2-dupilot-queue.fifo
+      - JOB_QUEUE_URL=https://sqs.ap-northeast-2.amazonaws.com/148761638563/test3-dupilot-queue.fifo
+      - JOB_QUEUE_FIFO=true
       - JOB_CALLBACK_BASE_URL=http://host.docker.internal:8000
       - DATA_DIR=/data
       - MODELS_DIR=/models
