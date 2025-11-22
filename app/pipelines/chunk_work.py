@@ -238,39 +238,78 @@ def chunk_work(job_details: dict):
             asset_dir.mkdir(parents=True, exist_ok=True)
 
             for speaker, replacement_info in voice_replacements.items():
-                # S3에서 다운로드
-                if "s3_key" in replacement_info:
-                    local_path = (
-                        asset_dir / f"{speaker}_{replacement_info['voice_id']}.wav"
+                local_path = asset_dir / f"{speaker}_{replacement_info['voice_id']}.wav"
+
+                # 우선순위: 원본 Voice Library 경로 > job-specific S3 경로 > 로컬 경로
+                downloaded = False
+
+                # 1. 원본 Voice Library에서 직접 다운로드 (최적화)
+                if "sample_key" in replacement_info and not local_path.exists():
+                    sample_bucket = replacement_info.get(
+                        "sample_bucket", voice_library_bucket or output_bucket
                     )
-                    if not local_path.exists():
-                        s3_bucket = replacement_info.get("s3_bucket", output_bucket)
-                        if download_from_s3(
-                            s3_bucket, replacement_info["s3_key"], local_path
-                        ):
-                            logging.debug(
-                                f"Job {job_id} chunk {chunk_index}: "
-                                f"Downloaded voice replacement for {speaker} from S3"
-                            )
-                        else:
-                            logging.warning(
-                                f"Job {job_id} chunk {chunk_index}: "
-                                f"Failed to download voice replacement for {speaker} from S3"
-                            )
-                            continue
-                    # 로컬 경로로 업데이트
-                    replacement_info["audio_path"] = str(local_path)
-                    speaker_voice_overrides[speaker] = replacement_info
+                    sample_key = replacement_info["sample_key"]
+                    if download_from_s3(sample_bucket, sample_key, local_path):
+                        logging.info(
+                            f"Job {job_id} chunk {chunk_index}: "
+                            f"Downloaded voice replacement for {speaker} from Voice Library "
+                            f"(s3://{sample_bucket}/{sample_key})"
+                        )
+                        downloaded = True
+                    else:
+                        logging.warning(
+                            f"Job {job_id} chunk {chunk_index}: "
+                            f"Failed to download voice replacement for {speaker} "
+                            f"from Voice Library (s3://{sample_bucket}/{sample_key})"
+                        )
+
+                # 2. Fallback: job-specific S3 경로에서 다운로드 (하위 호환성)
+                if (
+                    not downloaded
+                    and "s3_key" in replacement_info
+                    and not local_path.exists()
+                ):
+                    s3_bucket = replacement_info.get("s3_bucket", output_bucket)
+                    if download_from_s3(
+                        s3_bucket, replacement_info["s3_key"], local_path
+                    ):
+                        logging.info(
+                            f"Job {job_id} chunk {chunk_index}: "
+                            f"Downloaded voice replacement for {speaker} from job-specific S3 path"
+                        )
+                        downloaded = True
+                    else:
+                        logging.warning(
+                            f"Job {job_id} chunk {chunk_index}: "
+                            f"Failed to download voice replacement for {speaker} from S3"
+                        )
+
+                # 3. Fallback: 이미 로컬에 있는 경우
+                if local_path.exists():
+                    downloaded = True
                 elif "audio_path" in replacement_info:
                     # 이미 로컬 경로가 있는 경우 (fallback)
                     audio_path = Path(replacement_info["audio_path"])
                     if audio_path.exists():
-                        speaker_voice_overrides[speaker] = replacement_info
+                        # 기존 로컬 경로를 사용
+                        local_path = audio_path
+                        downloaded = True
                     else:
                         logging.warning(
                             f"Job {job_id} chunk {chunk_index}: "
                             f"Voice replacement file not found for {speaker}: {audio_path}"
                         )
+
+                # 다운로드 성공한 경우에만 사용
+                if downloaded and local_path.exists():
+                    replacement_info["audio_path"] = str(local_path)
+                    speaker_voice_overrides[speaker] = replacement_info
+                elif not downloaded:
+                    logging.warning(
+                        f"Job {job_id} chunk {chunk_index}: "
+                        f"Could not download or find voice replacement for {speaker}, skipping"
+                    )
+                    continue
         elif replace_voice_samples:
             logging.warning(
                 f"Job {job_id} chunk {chunk_index}: "

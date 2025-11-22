@@ -255,30 +255,26 @@ def split_up(job_details: dict):
                 voice_replacements = overrides
                 voice_replacement_diagnostics = diagnostics
 
-                # Voice replacement 파일들을 S3에 업로드
+                # Voice replacement 원본 정보만 manifest에 저장 (S3 업로드 제거)
+                # chunk_work에서 Voice Library에서 직접 다운로드하도록 최적화
                 if voice_replacements:
-                    replacement_dir = paths.interim_dir / "voice_replacements"
+                    logging.info(
+                        f"Job {job_id}: Prepared {len(voice_replacements)} voice replacements "
+                        f"(will be downloaded from Voice Library in chunk_work)"
+                    )
+                    # manifest에 저장할 때는 원본 Voice Library 경로 정보만 저장
+                    # audio_path는 로컬 경로이므로 제거 (chunk_work에서 다운로드할 것)
                     for speaker, replacement_info in voice_replacements.items():
-                        audio_path = Path(replacement_info["audio_path"])
-                        if audio_path.exists() and audio_path.is_file():
-                            # S3 경로 생성
-                            replacement_key = (
-                                f"{project_prefix}/interim/{job_id}/voice_replacements/"
-                                f"{speaker}_{replacement_info['voice_id']}.wav"
-                            )
-                            if upload_to_s3(output_bucket, replacement_key, audio_path):
-                                # manifest에 저장할 때는 S3 경로 정보만 저장
-                                voice_replacements[speaker]["s3_key"] = replacement_key
-                                voice_replacements[speaker]["s3_bucket"] = output_bucket
-                                logging.info(
-                                    f"Job {job_id}: Uploaded voice replacement for {speaker} "
-                                    f"to s3://{output_bucket}/{replacement_key}"
-                                )
-                            else:
-                                logging.warning(
-                                    f"Job {job_id}: Failed to upload voice replacement "
-                                    f"for {speaker} to S3"
-                                )
+                        # 원본 Voice Library 정보만 유지
+                        # sample_key, sample_bucket은 이미 materialize_voice_replacements에서 설정됨
+                        if "audio_path" in replacement_info:
+                            # 로컬 경로는 manifest에 저장하지 않음
+                            del replacement_info["audio_path"]
+                        logging.debug(
+                            f"Job {job_id}: Voice replacement for {speaker}: "
+                            f"sample_key={replacement_info.get('sample_key')}, "
+                            f"sample_bucket={replacement_info.get('sample_bucket')}"
+                        )
                 else:
                     logging.info(
                         f"Job {job_id}: No voice replacements prepared "

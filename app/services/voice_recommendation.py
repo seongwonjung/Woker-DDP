@@ -225,22 +225,152 @@ class VoiceReplacement:
 def load_voice_library(
     language: str | None = None, index_path: Path | None = None
 ) -> list[VoiceLibraryEntry]:
-    """Load the target-language voice library metadata."""
-    payload, source = _load_library_payload_from_s3(language)
-    path: Path | None = None
-    if payload is None:
-        path = _resolve_local_library_path(language, index_path)
-        if not path.is_file():
-            logger.info("Voice library index not found at %s", path)
-            return []
+    """Load the target-language voice library metadata.
 
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.warning("Failed to read voice library %s: %s", path, exc)
-            return []
-        source = str(path)
+    먼저 로컬 캐시를 확인하고, S3의 LastModified와 비교하여
+    필요할 때만 다운로드합니다.
+    """
+    from datetime import datetime, timezone
+    from utils.s3 import download_from_s3
+
+    path = _resolve_local_library_path(language, index_path)
+    payload = None
+    source = None
+
+    # S3 정보 준비
+    bucket = os.getenv("VOICE_LIBRARY_BUCKET") or os.getenv("AWS_S3_BUCKET")
+    lang_slug = _normalize_lang(language) or "default"
+    candidates = _library_s3_candidates(language)
+    remote_key = None
+
+    # 로컬 파일이 있는 경우
+    if path.is_file():
+        # S3의 LastModified 확인
+        should_download = False
+        if bucket and candidates:
+            try:
+                client = _get_s3_client()
+                for key in candidates:
+                    try:
+                        response = client.head_object(Bucket=bucket, Key=key)
+                        s3_last_modified = response.get("LastModified")
+                        if s3_last_modified:
+                            # 로컬 파일의 수정 시간
+                            local_modified = datetime.fromtimestamp(
+                                path.stat().st_mtime, tz=timezone.utc
+                            )
+                            # S3가 더 최신이면 다운로드 필요
+                            if s3_last_modified > local_modified:
+                                logger.info(
+                                    "S3 voice library is newer (S3: %s, Local: %s), "
+                                    "downloading...",
+                                    s3_last_modified,
+                                    local_modified,
+                                )
+                                should_download = True
+                                # 다운로드할 키 저장
+                                remote_key = key
+                                break
+                            else:
+                                logger.debug(
+                                    "Local voice library is up to date (S3: %s, Local: %s)",
+                                    s3_last_modified,
+                                    local_modified,
+                                )
+                                break
+                    except ClientError as exc:
+                        error_code = exc.response.get("Error", {}).get("Code")
+                        if error_code in {"NoSuchKey", "404"}:
+                            continue
+                        logger.warning(
+                            "Failed to check S3 voice library metadata: %s", exc
+                        )
+                        break
+                    except BotoCoreError as exc:
+                        logger.warning(
+                            "Failed to check S3 voice library metadata: %s", exc
+                        )
+                        break
+            except Exception as exc:
+                logger.warning("Failed to check S3 voice library metadata: %s", exc)
+
+        # 로컬 파일이 최신이면 로컬 파일 사용
+        if not should_download:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                source = str(path)
+                logger.info("Using cached voice library from %s", path)
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning("Failed to read voice library %s: %s", path, exc)
+                # 로컬 파일 읽기 실패 시 S3에서 다운로드 시도
+                should_download = True
+
+        # S3에서 다운로드 필요하면 다운로드
+        if should_download and bucket and candidates:
+            # remote_key가 설정되지 않았으면 첫 번째 candidate 사용
+            if remote_key is None:
+                remote_key = candidates[0]
+
+            # 로컬 디렉토리 생성
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+            if download_from_s3(bucket, remote_key, path, force=True):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                    source = f"s3://{bucket}/{remote_key} (downloaded)"
+                    logger.info("Downloaded and loaded voice library from S3")
+                except (OSError, json.JSONDecodeError) as exc:
+                    logger.warning(
+                        "Failed to read downloaded voice library %s: %s", path, exc
+                    )
+            else:
+                logger.warning("Failed to download voice library from S3")
+                # 다운로드 실패 시 기존 로컬 파일 사용 시도
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                    source = str(path) + " (fallback)"
+                    logger.info("Using existing local file after download failure")
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+    # 로컬 파일이 없는 경우
+    else:
+        logger.info("Voice library index not found locally at %s", path)
+
+        # S3에서 다운로드 시도
+        if bucket and candidates:
+            remote_key = candidates[0]
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+            if download_from_s3(bucket, remote_key, path, force=True):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                    source = f"s3://{bucket}/{remote_key} (downloaded)"
+                    logger.info("Downloaded and loaded voice library from S3")
+                except (OSError, json.JSONDecodeError) as exc:
+                    logger.warning(
+                        "Failed to read downloaded voice library %s: %s", path, exc
+                    )
+            else:
+                # 다운로드 실패 시 S3에서 직접 읽기 시도 (기존 방식)
+                payload, source = _load_library_payload_from_s3(language)
+                if payload:
+                    # 다운로드는 실패했지만 메모리에서 읽었으므로 로컬에 저장 시도
+                    try:
+                        with open(path, "w", encoding="utf-8") as f:
+                            json.dump(payload, f, ensure_ascii=False, indent=2)
+                        logger.info("Saved voice library to local cache: %s", path)
+                    except Exception as exc:
+                        logger.warning("Failed to save voice library to cache: %s", exc)
+
+    # payload가 없으면 빈 리스트 반환
+    if payload is None:
+        logger.info("Voice library index not found")
+        return []
 
     entries: list[VoiceLibraryEntry] = []
     raw_entries: Iterable[Any]
